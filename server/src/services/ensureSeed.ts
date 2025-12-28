@@ -10,7 +10,7 @@ export async function ensureSeededFromSnapshot() {
 
   // вызываем импорт как отдельный скрипт (чтобы не плодить циклы импортов)
   // передаем env, чтобы скрипт видел переменные окружения родителя (если они там есть)
-  await execFileAsync("node", ["--no-warnings", "--loader", "tsx", "src/scripts/snapshotImport.ts"], {
+  await execFileAsync("node", ["--no-warnings", "--import", "tsx", "src/scripts/snapshotImport.ts"], {
     cwd: process.cwd(),
     env: process.env,
   });
