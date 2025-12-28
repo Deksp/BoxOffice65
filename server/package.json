@@ -1,0 +1,29 @@
+{
+    "name": "boxoffice65-server",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "dev": "tsx watch src/index.ts",
+        "seed": "tsx src/scripts/seed.ts",
+        "reset": "tsx src/scripts/reset.ts",
+        "build": "tsup",
+        "snapshot:export": "tsx src/scripts/snapshotExport.ts",
+        "snapshot:import": "tsx src/scripts/snapshotImport.ts",
+        "start": "node dist/index.js"
+    },
+    "dependencies": {
+        "cors": "^2.8.5",
+        "dotenv": "^16.6.1",
+        "express": "^4.19.2",
+        "mongoose": "^8.6.3",
+        "node-fetch": "^3.3.2"
+    },
+    "devDependencies": {
+        "@types/cors": "^2.8.17",
+        "@types/express": "^4.17.21",
+        "@types/node": "^22.10.0",
+        "tsup": "^8.2.4",
+        "tsx": "^4.19.1",
+        "typescript": "^5.6.3"
+    }
+}

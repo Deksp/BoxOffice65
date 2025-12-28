@@ -1,0 +1,17 @@
+{
+    "name": "boxoffice65",
+    "private": true,
+    "workspaces": ["server", "web"],
+    "scripts": {
+      "dev": "npx concurrently -n server,web \"npm --workspace server run dev\" \"npm --workspace web run dev\"",
+      "seed": "npm --workspace server run seed",
+      "reset": "npm --workspace server run reset && npm --workspace server run seed",
+      "build": "npm --workspace web run build && npm --workspace server run build",
+      "start": "npm --workspace server run start",
+      "snapshot:export": "npm --workspace server run snapshot:export"
+    },
+    "devDependencies": {
+      "concurrently": "^9.0.0"
+    }
+  }
+  
