@@ -6,6 +6,7 @@
         "dev": "tsx watch src/index.ts",
         "seed": "tsx src/scripts/seed.ts",
         "reset": "tsx src/scripts/reset.ts",
+        "purge": "tsx src/scripts/purge.ts",
         "build": "tsup",
         "snapshot:export": "tsx src/scripts/snapshotExport.ts",
         "snapshot:import": "tsx src/scripts/snapshotImport.ts",

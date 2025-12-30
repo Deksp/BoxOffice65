@@ -6,6 +6,7 @@
       "dev": "npx concurrently -n server,web \"npm --workspace server run dev\" \"npm --workspace web run dev\"",
       "seed": "npm --workspace server run seed",
       "reset": "npm --workspace server run reset && npm --workspace server run seed",
+      "purge": "npm --workspace server run purge",
       "build": "npm --workspace web run build && npm --workspace server run build",
       "start": "npm --workspace server run start",
       "snapshot:export": "npm --workspace server run snapshot:export"
