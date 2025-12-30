@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { ObjectId } from "mongodb";
 import { getDb } from "../services/dbGuard.js";
+import { Binary } from "bson";
 
 const router = Router();
 
@@ -27,14 +28,28 @@ router.get("/:id", async (req, res) => {
     (await db.collection("libraryfilms").findOne({ _id: oid }, projection as any));
 
   const ps = (film as any)?.posterStored;
-  const data: Buffer | undefined = ps?.data;
+  const data: unknown = ps?.data;
   const mime: string | undefined = ps?.mime;
 
-  if (!data || !Buffer.isBuffer(data) || data.length === 0) return res.status(404).send("Poster not found");
+  let buf: Buffer | null = null;
+  if (Buffer.isBuffer(data)) {
+    buf = data;
+  } else if (data instanceof Binary) {
+    // MongoDB BinData is returned as bson Binary
+    // Binary.buffer is Uint8Array in modern bson versions
+    buf = Buffer.from(data.buffer);
+  } else if (data && typeof data === "object" && "buffer" in (data as any)) {
+    // extra safety in case Binary shape is present but instanceof fails
+    const b = (data as any).buffer;
+    if (Buffer.isBuffer(b)) buf = b;
+    else if (b instanceof Uint8Array) buf = Buffer.from(b);
+  }
+
+  if (!buf || buf.length === 0) return res.status(404).send("Poster not found");
 
   res.setHeader("Content-Type", mime || "image/jpeg");
   res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-  res.send(data);
+  res.send(buf);
 });
 
 export default router;
