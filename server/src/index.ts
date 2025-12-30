@@ -11,10 +11,12 @@ dotenv.config({ path: path.resolve(__dirname, "../.env") });
 import "./models/Film.js";
 import "./models/YearCard.js";
 import "./models/Metrics.js";
+import "./models/LibraryFilm.js";
 
 import filmsRouter from "./routes/films.js";
 import insightsRouter from "./routes/insights.js";
 import adminRouter from "./routes/admin.js";
+import libraryRouter from "./routes/library.js";
 
 // чтобы модель Insight зарегистрировалась
 import "./models/Insight.js";
@@ -42,6 +44,7 @@ async function main() {
   app.use("/api/years", yearsRouter);
   app.use("/api/years", insightsRouter); // добавляет /:year/insights
   app.use("/api/admin", adminRouter);
+  app.use("/api/library", libraryRouter);
 
   // Production: раздаём собранный фронт
   const webDist = path.resolve(__dirname, "../../web/dist");

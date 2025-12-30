@@ -10,6 +10,19 @@ type Film = {
   external?: { tmdbId?: number; tmdbUrl?: string; kinopoiskUrl?: string };
 };
 
+type LibraryFilm = Film;
+// Library films may contain offline metrics-like fields (filled by python script)
+type LibraryFilmWithStats = LibraryFilm & {
+  money?: {
+    budgetUsd?: { selected?: number };
+    grossWorldwideUsd?: { selected?: number };
+    grossDomesticUsd?: { selected?: number };
+  };
+  ratings?: {
+    tmdb?: { selected?: number };
+  };
+};
+
 type Metric = {
   year: number;
   money?: {
@@ -104,6 +117,7 @@ export default function App() {
   const [yearInsights, setYearInsights] = useState<Insight[]>([]);
   const [loadingYear, setLoadingYear] = useState(false);
   const [yearErr, setYearErr] = useState<string | null>(null);
+  const [rebuildingYears, setRebuildingYears] = useState(false);
 
   // Films view state
   const [filmQ, setFilmQ] = useState("");
@@ -119,6 +133,12 @@ export default function App() {
   const [addStatus, setAddStatus] = useState<string | null>(null);
   const [addErr, setAddErr] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+
+  // Library films (secondary DB)
+  const [libraryQ, setLibraryQ] = useState("");
+  const [libraryFilms, setLibraryFilms] = useState<LibraryFilmWithStats[]>([]);
+  const [loadingLibrary, setLoadingLibrary] = useState(false);
+  const [libraryErr, setLibraryErr] = useState<string | null>(null);
 
   const mainScrollRef = useRef<HTMLElement>(null);
 
@@ -145,6 +165,11 @@ export default function App() {
     void loadFilms();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Load library list when opening the "add" tab
+  useEffect(() => {
+    if (tab === "add") void loadLibrary();
+  }, [tab]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // При изменении selectedYear подгружаем данные
   useEffect(() => {
     if (selectedYear) {
@@ -166,6 +191,30 @@ export default function App() {
       setYearInsights([]);
     } finally {
       setLoadingYear(false);
+    }
+  }
+
+  async function reloadYearsList() {
+    const ys = await apiGet<number[]>("/api/years");
+    setAvailableYears(ys);
+    return ys;
+  }
+
+  async function rebuildYearsFromDb() {
+    setYearErr(null);
+    setRebuildingYears(true);
+    try {
+      await apiPost(`/api/admin/years/rebuild`, {});
+      const ys = await reloadYearsList();
+      const y = selectedYear ?? ys[0] ?? null;
+      if (y != null) {
+        setSelectedYear(y);
+        await loadYear(y);
+      }
+    } catch (e: unknown) {
+      setYearErr(errMsg(e));
+    } finally {
+      setRebuildingYears(false);
     }
   }
 
@@ -227,6 +276,41 @@ export default function App() {
     }
   }
 
+  async function loadLibrary() {
+    setLoadingLibrary(true);
+    setLibraryErr(null);
+    try {
+      const params = new URLSearchParams();
+      if (libraryQ.trim()) params.set("q", libraryQ.trim());
+      params.set("limit", "200");
+      params.set("excludeMain", "1");
+      const r = await apiGet<{ items: LibraryFilmWithStats[] }>(`/api/library/films?${params.toString()}`);
+      setLibraryFilms(r.items ?? []);
+    } catch (e: unknown) {
+      setLibraryErr(errMsg(e));
+      setLibraryFilms([]);
+    } finally {
+      setLoadingLibrary(false);
+    }
+  }
+
+  async function importFromLibrary(id: string) {
+    setAddErr(null);
+    setAddStatus(null);
+    setAdding(true);
+    try {
+      await apiPost(`/api/library/films/${id}/import`, {});
+      setAddStatus("Фильм добавлен в основную базу.");
+      await loadFilms();
+      await reloadYearsList(); // чтобы новые года появлялись в UI без перезапуска
+      await loadLibrary(); // чтобы сразу исчез из списка (excludeMain=1)
+    } catch (e: unknown) {
+      setAddErr(errMsg(e));
+    } finally {
+      setAdding(false);
+    }
+  }
+
   async function doDelete(id: string) {
     if (!confirm("Удалить фильм и его метрики?")) return;
     try {
@@ -267,9 +351,18 @@ export default function App() {
             <aside className="panel">
               <div className="panelHeader">
                 <div className="panelTitle">Годы</div>
-                <button className="btn" onClick={() => selectedYear && loadYear(selectedYear)} disabled={loadingYear || !selectedYear}>
-                  Обновить
-                </button>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button
+                    className="btn"
+                    onClick={() => selectedYear && loadYear(selectedYear)}
+                    disabled={loadingYear || !selectedYear}
+                  >
+                    Обновить
+                  </button>
+                  <button className="btn" onClick={rebuildYearsFromDb} disabled={rebuildingYears}>
+                    {rebuildingYears ? "Строю…" : "Построить годы"}
+                  </button>
+                </div>
               </div>
 
               <div className="yearsList">
@@ -440,7 +533,7 @@ export default function App() {
                   return (
                     <div className="trow" key={film._id}>
                       <div className="posterCell">
-                        {img ? <img className="posterSm" src={img} alt="" /> : <div className="posterPh" />}
+                        {img ? <img className="posterSm" src={img} alt="" /> : <div className="posterPh sm" />}
                       </div>
                       <div className="filmCell">
                         <div className="filmTitle">{film.titleRu || film.title}</div>
@@ -515,6 +608,87 @@ export default function App() {
               <div className="muted">
                 TMDb ID можно взять из ссылки фильма в TMDb: <span className="mono">/movie/&lt;ID&gt;</span>.
               </div>
+            </div>
+
+            <div className="block libraryBlock">
+              <div className="blockTitle">Библиотека фильмов (офлайн)</div>
+
+              <div className="row">
+                <input
+                  className="input"
+                  value={libraryQ}
+                  onChange={(e) => setLibraryQ(e.target.value)}
+                  placeholder="Поиск в библиотеке…"
+                />
+                <button className="btn" onClick={() => void loadLibrary()} disabled={loadingLibrary}>
+                  {loadingLibrary ? "Загрузка…" : "Обновить список"}
+                </button>
+              </div>
+
+              {libraryErr && <div className="error">{libraryErr}</div>}
+
+              {!libraryErr && !loadingLibrary && libraryFilms.length === 0 && (
+                <div className="muted">
+                  В библиотеке пока нет фильмов. Наполни коллекцию <span className="mono">libraryfilms</span> своим скриптом,
+                  затем импортируй их в основную базу этой кнопкой.
+                </div>
+              )}
+
+              {libraryFilms.length > 0 && (
+                <div className="libraryTableScroll">
+                  <div className="table libraryTable">
+                    <div className="thead">
+                      <div />
+                      <div>Фильм</div>
+                      <div>Год</div>
+                      <div>Бюджет</div>
+                      <div>Сборы</div>
+                      <div>Рейтинг</div>
+                      <div>Ссылки</div>
+                      <div />
+                    </div>
+
+                    {libraryFilms.map((f) => {
+                      const img = posterUrl(f);
+                      const budget = f.money?.budgetUsd?.selected;
+                      const revenue = f.money?.grossWorldwideUsd?.selected;
+                      const rating = f.ratings?.tmdb?.selected;
+                      return (
+                        <div className="trow" key={f._id}>
+                          <div className="posterCell">
+                            {img ? <img className="posterSm" src={img} alt="" /> : <div className="posterPh sm" />}
+                          </div>
+                          <div className="filmCell">
+                            <div className="filmTitle">{f.titleRu || f.title}</div>
+                            {f.titleRu && f.titleRu !== f.title && <div className="muted">{f.title}</div>}
+                          </div>
+                          <div>{f.releaseYear ?? "—"}</div>
+                          <div>{fmtMoney(budget)}</div>
+                          <div>{fmtMoney(revenue)}</div>
+                          <div>{fmtRating(rating)}</div>
+                          <div className="links">
+                            {f.external?.tmdbUrl && (
+                              <a className="link" href={f.external.tmdbUrl} target="_blank" rel="noreferrer">
+                                TMDb
+                              </a>
+                            )}
+                            {f.external?.kinopoiskUrl && (
+                              <a className="link" href={f.external.kinopoiskUrl} target="_blank" rel="noreferrer">
+                                КП
+                              </a>
+                            )}
+                          </div>
+                          <div className="libActionCell">
+                            <button className="btn" onClick={() => void importFromLibrary(f._id)} disabled={adding}>
+                              Добавить в основную
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           </section>
         )}

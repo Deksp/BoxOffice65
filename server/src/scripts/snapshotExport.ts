@@ -14,8 +14,14 @@ import { connectMongo } from "../db.js";
 
 const SNAP_DIR = path.resolve(process.cwd(), "seed", "snapshot");
 
-// ВАЖНО: названия коллекций должны совпадать с реальными в Mongo
-const collections = ["films", "metrics", "years", "insights"];
+// Коллекции в БД -> Имена файлов
+const mapping = {
+  films: "films",
+  metrics: "metrics",
+  yearcards: "years", // из коллекции yearcards в файл years.ejson
+  insights: "insights",
+  libraryfilms: "library_films",
+};
 
 async function main() {
   const uri = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/boxoffice65";
@@ -26,11 +32,11 @@ async function main() {
 
   await mkdir(SNAP_DIR, { recursive: true });
 
-  for (const name of collections) {
-    const docs = await db.collection(name).find({}).toArray();
-    const out = EJSON.stringify(docs, { relaxed: false }); // сохраняет ObjectId/Date корректно
-    await writeFile(path.join(SNAP_DIR, `${name}.ejson`), out, "utf8");
-    console.log(`[snapshot] exported ${name}: ${docs.length}`);
+  for (const [colName, fileName] of Object.entries(mapping)) {
+    const docs = await db.collection(colName).find({}).toArray();
+    const out = EJSON.stringify(docs, { relaxed: false });
+    await writeFile(path.join(SNAP_DIR, `${fileName}.ejson`), out, "utf8");
+    console.log(`[snapshot] exported ${colName} -> ${fileName}.ejson: ${docs.length}`);
   }
 
   await mongoose.disconnect();

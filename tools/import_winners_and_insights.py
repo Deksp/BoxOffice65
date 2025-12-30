@@ -243,7 +243,12 @@ class TMDb:
         params = dict(params or {})
         params["api_key"] = self.api_key
         while True:
-            r = self.s.get(f"{TMDB_API}{path}", params=params, timeout=30)
+            # IMPORTANT: network issues must not crash the whole import.
+            # Let callers decide how to fallback (e.g., use local DB).
+            try:
+                r = self.s.get(f"{TMDB_API}{path}", params=params, timeout=30)
+            except requests.exceptions.RequestException as e:
+                raise RuntimeError(f"TMDb request failed: {e}") from e
             if r.status_code == 429:
                 time.sleep(1.0)
                 continue
@@ -286,17 +291,73 @@ def pick_best_search_result(query: str, year: int | None, results: list[dict]) -
 def resolve_one(tmdb: TMDb, query_raw: str, year: int | None) -> dict | None:
     q = normalize_query(query_raw)
 
-    s = tmdb.search_movie(q, year)
-    best = pick_best_search_result(q, year, s.get("results", []))
+    try:
+        s = tmdb.search_movie(q, year)
+        best = pick_best_search_result(q, year, s.get("results", []))
+    except Exception:
+        # Network / TMDb failures should not abort the whole import
+        return None
 
     if best is None:
-        s2 = tmdb.search_movie(q, None)
-        best = pick_best_search_result(q, year, s2.get("results", []))
+        try:
+            s2 = tmdb.search_movie(q, None)
+            best = pick_best_search_result(q, year, s2.get("results", []))
+        except Exception:
+            return None
 
     if best is None:
         return None
 
-    return tmdb.movie_details(best["id"])
+    try:
+        return tmdb.movie_details(best["id"])
+    except Exception:
+        return None
+
+
+def resolve_film_in_db(db, query_raw: str, year: int | None):
+    """
+    Offline-friendly resolver:
+    tries to match an existing film document in MongoDB by title/titleRu and releaseYear.
+    Returns film document or None.
+    """
+    films = db["films"]
+    q = normalize_query(query_raw)
+    q_low = (q or "").lower()
+
+    # Prefer exact year, but allow +-1 year to handle edge cases
+    year_candidates = []
+    if year is not None:
+        year_candidates = [year, year - 1, year + 1]
+
+    candidates = []
+    if year_candidates:
+        candidates = list(films.find({"releaseYear": {"$in": year_candidates}}).limit(500))
+    else:
+        candidates = list(films.find({}).sort([("releaseYear", -1)]).limit(500))
+
+    best = None
+    best_score = -1.0
+    for f in candidates:
+        title_ru = (f.get("titleRu") or "")
+        title = (f.get("title") or "")
+
+        # quick substring win
+        if q_low and (q_low in title_ru.lower() or q_low in title.lower()):
+            score = 1.0
+        else:
+            score = max(similarity(q, title_ru), similarity(q, title))
+
+        # slight bonus for exact year match
+        if year is not None and f.get("releaseYear") == year:
+            score += 0.1
+
+        if score > best_score:
+            best, best_score = f, score
+
+    # conservative threshold to avoid wrong matches
+    if best is None or best_score < 0.60:
+        return None
+    return best
 
 
 def resolve_most_expensive_variant(tmdb: TMDb, query_raw: str, year: int):
@@ -442,11 +503,17 @@ def main():
     ap.add_argument("--reset", action="store_true", help="Clear films/metrics/yearcards/insights before import")
     ap.add_argument("--from-year", type=int, default=1960)
     ap.add_argument("--to-year", type=int, default=2024)
+    ap.add_argument(
+        "--resume",
+        action="store_true",
+        help="Skip years that already have a yearcard in DB (useful after partial runs/timeouts)",
+    )
+    ap.add_argument(
+        "--offline",
+        action="store_true",
+        help="Do not use TMDb network calls. Build yearcards from existing films in DB and still import insight texts.",
+    )
     args = ap.parse_args()
-
-    api_key = os.environ.get("TMDB_API_KEY") or TMDB_API_KEY_HARDCODED
-    if not api_key:
-        raise SystemExit("TMDB_API_KEY is missing")
 
     client = MongoClient(args.mongo)
     db = client[args.db]
@@ -459,18 +526,60 @@ def main():
         db["films"].delete_many({})
         print("DB reset: films, metrics, yearcards, insights")
 
-    tmdb = TMDb(api_key)
+    tmdb = None
+    if not args.offline:
+        api_key = os.environ.get("TMDB_API_KEY") or TMDB_API_KEY_HARDCODED
+        if not api_key:
+            raise SystemExit("TMDB_API_KEY is missing (or use --offline)")
+        tmdb = TMDb(api_key)
 
     # 1) Import winners
     for (year, cash_raw, exp_raw) in WINNERS:
         if year < args.from_year or year > args.to_year:
             continue
 
-        cash_det = resolve_one(tmdb, cash_raw, year)
-        exp_det = resolve_most_expensive_variant(tmdb, exp_raw, year)
+        if args.resume:
+            if db["yearcards"].find_one({"year": year}, {"_id": 1}):
+                print(f"[{year}] SKIP (already exists)")
+                continue
+
+        if args.offline:
+            cash_f = resolve_film_in_db(db, cash_raw, year)
+            exp_f = resolve_film_in_db(db, exp_raw, year)
+            if not cash_f or not exp_f:
+                print(f"[{year}] UNRESOLVED (offline): cash={bool(cash_f)} exp={bool(exp_f)} :: {cash_raw} | {exp_raw}")
+                continue
+            upsert_yearcard(db, year, cash_f["_id"], exp_f["_id"])
+            print(f"[{year}] OK (offline): cash='{cash_f.get('titleRu') or cash_f.get('title')}' exp='{exp_f.get('titleRu') or exp_f.get('title')}'")
+            continue
+
+        # online (TMDb) path with safe fallback to local DB on failures
+        cash_det = resolve_one(tmdb, cash_raw, year) if tmdb else None
+        exp_det = resolve_most_expensive_variant(tmdb, exp_raw, year) if tmdb else None
 
         if not cash_det or not exp_det:
-            print(f"[{year}] UNRESOLVED: cash={bool(cash_det)} exp={bool(exp_det)} :: {cash_raw} | {exp_raw}")
+            cash_f = resolve_film_in_db(db, cash_raw, year) if not cash_det else None
+            exp_f = resolve_film_in_db(db, exp_raw, year) if not exp_det else None
+            if cash_det and not exp_det and not exp_f:
+                print(f"[{year}] UNRESOLVED: exp missing :: {cash_raw} | {exp_raw}")
+                continue
+            if exp_det and not cash_det and not cash_f:
+                print(f"[{year}] UNRESOLVED: cash missing :: {cash_raw} | {exp_raw}")
+                continue
+            if (not cash_det and not cash_f) or (not exp_det and not exp_f):
+                print(f"[{year}] UNRESOLVED: cash={bool(cash_det or cash_f)} exp={bool(exp_det or exp_f)} :: {cash_raw} | {exp_raw}")
+                continue
+
+            # We have enough to build yearcard at least
+            if cash_f is None and cash_det is not None:
+                cash_f = upsert_film_from_tmdb(db, cash_det, year)
+                upsert_metrics_from_tmdb(db, cash_f["_id"], year, cash_det)
+            if exp_f is None and exp_det is not None:
+                exp_f = upsert_film_from_tmdb(db, exp_det, year)
+                upsert_metrics_from_tmdb(db, exp_f["_id"], year, exp_det)
+
+            upsert_yearcard(db, year, cash_f["_id"], exp_f["_id"])
+            print(f"[{year}] OK (fallback): cash='{cash_f.get('titleRu')}' exp='{exp_f.get('titleRu')}'")
             continue
 
         cash_f = upsert_film_from_tmdb(db, cash_det, year)
@@ -491,13 +600,14 @@ def main():
         tags = item.get("tags") or []
 
         film_ids = []
-        for ref in film_refs:
-            det = resolve_one(tmdb, ref, year) if year else resolve_one(tmdb, ref, None)
-            if det:
-                fdoc = upsert_film_from_tmdb(db, det, year if year else None)
-                if year:
-                    upsert_metrics_from_tmdb(db, fdoc["_id"], year, det)
-                film_ids.append(fdoc["_id"])
+        if not args.offline and tmdb:
+            for ref in film_refs:
+                det = resolve_one(tmdb, ref, year) if year else resolve_one(tmdb, ref, None)
+                if det:
+                    fdoc = upsert_film_from_tmdb(db, det, year if year else None)
+                    if year:
+                        upsert_metrics_from_tmdb(db, fdoc["_id"], year, det)
+                    film_ids.append(fdoc["_id"])
 
         upsert_insight(db, year=year, film_ids=film_ids, title=title, text=text, tags=tags)
 

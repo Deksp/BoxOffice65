@@ -14,7 +14,14 @@ import { connectMongo } from "../db.js";
 const SNAP_DIR = path.resolve(process.cwd(), "seed", "snapshot");
 
 // Порядок важен из-за ссылок: сначала films, потом metrics, потом years, потом insights
-const order = ["films", "metrics", "years", "insights"];
+// Маппинг: файл (.ejson) -> коллекция в БД
+const mapping = [
+  { file: "films", col: "films" },
+  { file: "metrics", col: "metrics" },
+  { file: "years", col: "yearcards" }, // years.ejson -> yearcards
+  { file: "insights", col: "insights" },
+  { file: "library_films", col: "libraryfilms" },
+];
 
 async function main() {
   const uri = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/boxoffice65";
@@ -23,16 +30,20 @@ async function main() {
   const db = mongoose.connection.db;
   if (!db) throw new Error("Mongo connected, but db is undefined");
 
-  for (const name of order) {
-    const file = path.join(SNAP_DIR, `${name}.ejson`);
-    const raw = await readFile(file, "utf8");
-    const docs = EJSON.parse(raw) as unknown[];
+  for (const { file: fileName, col: colName } of mapping) {
+    const filePath = path.join(SNAP_DIR, `${fileName}.ejson`);
+    try {
+      const raw = await readFile(filePath, "utf8");
+      const docs = EJSON.parse(raw) as unknown[];
 
-    await db.collection(name).deleteMany({});
-    if (docs.length) {
-      await db.collection(name).insertMany(docs as never[], { ordered: false });
+      await db.collection(colName).deleteMany({});
+      if (docs.length) {
+        await db.collection(colName).insertMany(docs as never[], { ordered: false });
+      }
+      console.log(`[snapshot] restored ${fileName}.ejson -> ${colName}: ${docs.length}`);
+    } catch (e) {
+      console.warn(`[snapshot] skipped ${fileName}: ${(e as Error).message}`);
     }
-    console.log(`[snapshot] restored ${name}: ${docs.length}`);
   }
 
   await mongoose.disconnect();

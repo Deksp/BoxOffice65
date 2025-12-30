@@ -130,4 +130,124 @@ router.delete("/films/:id", async (req, res) => {
   res.json({ ok: true, id });
 });
 
+// Offline-safe: rebuild yearcards from existing metrics (no TMDb calls)
+router.post("/years/rebuild", async (_req, res) => {
+  const db = getDb();
+  const metricsCol = db.collection("metrics");
+  const filmsCol = db.collection("films");
+  const libraryCol = db.collection("libraryfilms");
+
+  // 0) Offline backfill: if some films exist in main DB but have no usable metrics,
+  // try to populate their metrics from libraryfilms (by external.tmdbId).
+  // This makes "rebuild years" reflect the latest library enrichment without internet.
+  const libDocs = await libraryCol
+    .find(
+      { "external.tmdbId": { $type: "number" } },
+      {
+        projection: {
+          "external.tmdbId": 1,
+          releaseYear: 1,
+          money: 1,
+          ratings: 1,
+        },
+      }
+    )
+    .toArray();
+
+  const libByTmdbId = new Map<number, any>();
+  for (const d of libDocs) {
+    const id = d?.external?.tmdbId;
+    if (typeof id === "number" && Number.isFinite(id)) libByTmdbId.set(id, d);
+  }
+
+  const mainFilms = await filmsCol
+    .find(
+      { "external.tmdbId": { $type: "number" } },
+      { projection: { _id: 1, releaseYear: 1, "external.tmdbId": 1 } }
+    )
+    .toArray();
+
+  let metricsBackfilled = 0;
+  for (const f of mainFilms) {
+    const tmdbId = f?.external?.tmdbId;
+    const year = typeof f?.releaseYear === "number" ? f.releaseYear : Number(f?.releaseYear);
+    if (typeof tmdbId !== "number" || !Number.isFinite(tmdbId) || !Number.isFinite(year)) continue;
+
+    const lib = libByTmdbId.get(tmdbId);
+    if (!lib) continue;
+
+    const b = lib?.money?.budgetUsd?.selected;
+    const ww = lib?.money?.grossWorldwideUsd?.selected;
+    const dom = lib?.money?.grossDomesticUsd?.selected;
+    const rt = lib?.ratings?.tmdb?.selected;
+
+    // if library has no numeric data, nothing to backfill
+    if (
+      !(typeof b === "number" && Number.isFinite(b)) &&
+      !(typeof ww === "number" && Number.isFinite(ww)) &&
+      !(typeof dom === "number" && Number.isFinite(dom)) &&
+      !(typeof rt === "number" && Number.isFinite(rt))
+    ) {
+      continue;
+    }
+
+    const setObj: Record<string, unknown> = {
+      filmId: f._id,
+      year,
+      updatedAt: new Date(),
+    };
+    if (typeof b === "number" && Number.isFinite(b)) setObj["money.budgetUsd.selected"] = b;
+    if (typeof ww === "number" && Number.isFinite(ww)) setObj["money.grossWorldwideUsd.selected"] = ww;
+    if (typeof dom === "number" && Number.isFinite(dom)) setObj["money.grossDomesticUsd.selected"] = dom;
+    if (typeof rt === "number" && Number.isFinite(rt)) setObj["ratings.tmdb.selected"] = rt;
+
+    await metricsCol.updateOne(
+      { filmId: f._id, year },
+      { $set: setObj, $setOnInsert: { createdAt: new Date() } },
+      { upsert: true }
+    );
+    metricsBackfilled++;
+  }
+
+  const years = (await metricsCol.distinct("year")) as unknown[];
+  const yearsNum = years
+    .map((y) => (typeof y === "number" ? y : Number(y)))
+    .filter((y) => Number.isFinite(y))
+    .sort((a, b) => a - b);
+
+  if (yearsNum.length === 0) {
+    return res.status(400).json({ error: "No metrics found. Cannot rebuild years." });
+  }
+
+  // Full rebuild semantics:
+  // - remove yearcards that are no longer present in metrics
+  // - recalc winners for every year from current metrics
+  const cols = await db.listCollections().toArray();
+  const names = new Set(cols.map((c) => c.name));
+  const yearColName = names.has("yearcards") ? "yearcards" : names.has("years") ? "years" : "yearcards";
+  const yearCol = db.collection(yearColName);
+  const deletedObsolete = (await yearCol.deleteMany({ year: { $nin: yearsNum } })).deletedCount ?? 0;
+
+  const results: { year: number; ok: boolean; reason?: string }[] = [];
+  for (const y of yearsNum) {
+    try {
+      const r = await recalcYear(y);
+      results.push({ year: y, ok: Boolean((r as any).ok), reason: (r as any).reason });
+    } catch (e: any) {
+      results.push({ year: y, ok: false, reason: e?.message ?? String(e) });
+    }
+  }
+
+  res.json({
+    ok: true,
+    years: yearsNum,
+    results,
+    updated: results.filter((r) => r.ok).length,
+    failed: results.filter((r) => !r.ok).length,
+    deletedObsolete,
+    yearCollection: yearColName,
+    metricsBackfilled,
+  });
+});
+
 export default router;

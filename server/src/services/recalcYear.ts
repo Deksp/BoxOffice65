@@ -19,6 +19,16 @@ export async function recalcYear(year: number) {
   const metricsCol = db.collection("metrics");
   const yearCol = await getYearCollection();
 
+  // 0) самый кассовый (domestic) — если есть
+  const topDomestic = await metricsCol
+    .find({
+      year,
+      "money.grossDomesticUsd.selected": { $type: "number" },
+    })
+    .sort({ "money.grossDomesticUsd.selected": -1 })
+    .limit(1)
+    .toArray();
+
   // 1) самый кассовый (worldwide)
   const topRevenue = await metricsCol
     .find({
@@ -40,6 +50,7 @@ export async function recalcYear(year: number) {
     .toArray();
 
   const cashFilmId = topRevenue[0]?.filmId;
+  const domesticFilmId = topDomestic[0]?.filmId ?? cashFilmId;
   const expensiveFilmId = topBudget[0]?.filmId;
 
   if (!cashFilmId || !expensiveFilmId) {
@@ -53,7 +64,7 @@ export async function recalcYear(year: number) {
       $set: {
         year,
         "winners.topWorldwideFilmId": cashFilmId,
-        "winners.topDomesticFilmId": cashFilmId, // placeholder
+        "winners.topDomesticFilmId": domesticFilmId,
         "winners.mostExpensiveFilmId": expensiveFilmId,
         updatedAt: new Date(),
       },
@@ -62,5 +73,5 @@ export async function recalcYear(year: number) {
     { upsert: true }
   );
 
-  return { ok: true, year, cashFilmId, expensiveFilmId };
+  return { ok: true, year, cashFilmId, domesticFilmId, expensiveFilmId };
 }
