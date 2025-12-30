@@ -19,9 +19,9 @@ yearsRouter.get("/:year", async (req, res) => {
   if (!Number.isFinite(year)) return res.status(400).json({ error: "Invalid year" });
 
   const card = await YearCardModel.findOne({ year })
-    .populate("winners.topDomesticFilmId")
-    .populate("winners.topWorldwideFilmId")
-    .populate("winners.mostExpensiveFilmId")
+    .populate({ path: "winners.topDomesticFilmId", select: "-posterStored" })
+    .populate({ path: "winners.topWorldwideFilmId", select: "-posterStored" })
+    .populate({ path: "winners.mostExpensiveFilmId", select: "-posterStored" })
     .lean();
 
   if (!card) return res.status(404).json({ error: "Year not found" });
@@ -34,9 +34,9 @@ yearsRouter.get("/:year/details", async (req, res) => {
   if (!Number.isFinite(year)) return res.status(400).json({ error: "Invalid year" });
 
   const card = await YearCardModel.findOne({ year })
-    .populate("winners.topDomesticFilmId")
-    .populate("winners.topWorldwideFilmId")
-    .populate("winners.mostExpensiveFilmId")
+    .populate({ path: "winners.topDomesticFilmId", select: "-posterStored" })
+    .populate({ path: "winners.topWorldwideFilmId", select: "-posterStored" })
+    .populate({ path: "winners.mostExpensiveFilmId", select: "-posterStored" })
     .lean();
 
   if (!card) return res.status(404).json({ error: "Year not found" });

@@ -31,7 +31,7 @@ router.get("/films", async (req, res) => {
   }
 
   const items = await col
-    .find(filter)
+    .find(filter, { projection: { posterStored: 0 } })
     .sort({ releaseYear: -1, title: 1 })
     .limit(limit)
     .toArray();
@@ -115,6 +115,7 @@ router.post("/films/:id/import", async (req, res) => {
         type: libFilm.type ?? "movie",
         genres: Array.isArray(libFilm.genres) ? libFilm.genres : [],
         poster: libFilm.poster ?? null,
+        posterStored: libFilm.posterStored ?? undefined,
         external: libFilm.external ?? {},
         updatedAt: now,
       },

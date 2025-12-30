@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { ObjectId } from "mongodb";
+import fetch from "node-fetch";
 import { tmdbMovieDetails } from "../services/tmdb.js";
 import { recalcYear } from "../services/recalcYear.js";
 import { getDb } from "../services/dbGuard.js";
@@ -13,6 +14,33 @@ function kpSearchUrl(title: string, year?: number) {
 
 function tmdbUrl(tmdbId: number) {
   return `https://www.themoviedb.org/movie/${tmdbId}`;
+}
+
+async function tryStorePosterToFilm(filmsCol: any, filmId: any, posterPath: string) {
+  if (!posterPath) return;
+  try {
+    // w342 is enough for UI and keeps DB size reasonable
+    const url = `https://image.tmdb.org/t/p/w342${posterPath}`;
+    const r = await fetch(url);
+    if (!r.ok) return;
+    const mime = r.headers.get("content-type") || "image/jpeg";
+    const ab = await r.arrayBuffer();
+    const buf = Buffer.from(ab);
+    // safety limit ~2MB
+    if (buf.length > 2_000_000) return;
+    await filmsCol.updateOne(
+      { _id: filmId },
+      {
+        $set: {
+          poster: { provider: "stored", path: posterPath },
+          posterStored: { mime, data: buf },
+          updatedAt: new Date(),
+        },
+      }
+    );
+  } catch {
+    // ignore poster failures
+  }
 }
 
 router.post("/films/import-tmdb", async (req, res) => {
@@ -99,6 +127,11 @@ router.post("/films/import-tmdb", async (req, res) => {
 
     // Recalc year winners
     await recalcYear(releaseYear);
+  }
+
+  // Store poster bytes for offline mode (best-effort)
+  if (det.poster_path) {
+    void tryStorePosterToFilm(filmsCol, filmDoc._id, String(det.poster_path));
   }
 
   res.json({

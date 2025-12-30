@@ -6,7 +6,7 @@ type Film = {
   title: string;
   titleRu?: string;
   releaseYear?: number;
-  poster?: { provider: "tmdb"; path: string } | null;
+  poster?: { provider: "tmdb" | "stored"; path?: string } | null;
   external?: { tmdbId?: number; tmdbUrl?: string; kinopoiskUrl?: string };
 };
 
@@ -99,7 +99,13 @@ function errMsg(e: unknown): string {
 }
 
 function posterUrl(f?: Film) {
-  const p = f?.poster?.path;
+  const poster = f?.poster;
+  if (!poster) return null;
+  if (poster.provider === "stored") {
+    // offline-safe: served by backend from Mongo binary
+    return f?._id ? `/api/posters/${f._id}` : null;
+  }
+  const p = poster.path;
   if (!p) return null;
   return `https://image.tmdb.org/t/p/w342${p}`;
 }

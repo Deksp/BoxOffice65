@@ -36,7 +36,11 @@ router.get("/", async (req, res) => {
   else if (sort === "year") sortObj.releaseYear = dir;
   else sortObj.releaseYear = -1;
 
-  const films = await filmsCol.find(filter).sort(sortObj as Record<string, 1 | -1>).limit(limit).toArray();
+  const films = await filmsCol
+    .find(filter, { projection: { posterStored: 0 } })
+    .sort(sortObj as Record<string, 1 | -1>)
+    .limit(limit)
+    .toArray();
 
   if (!withMetrics) {
     res.json({ items: films });

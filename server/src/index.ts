@@ -17,6 +17,7 @@ import filmsRouter from "./routes/films.js";
 import insightsRouter from "./routes/insights.js";
 import adminRouter from "./routes/admin.js";
 import libraryRouter from "./routes/library.js";
+import postersRouter from "./routes/posters.js";
 
 // чтобы модель Insight зарегистрировалась
 import "./models/Insight.js";
@@ -45,6 +46,7 @@ async function main() {
   app.use("/api/years", insightsRouter); // добавляет /:year/insights
   app.use("/api/admin", adminRouter);
   app.use("/api/library", libraryRouter);
+  app.use("/api/posters", postersRouter);
 
   // Production: раздаём собранный фронт
   const webDist = path.resolve(__dirname, "../../web/dist");

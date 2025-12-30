@@ -9,8 +9,13 @@ const FilmSchema = new mongoose.Schema(
     titleRu: { type: String },
     genres: { type: [String], default: [] },
     poster: {
-      provider: { type: String, enum: ["tmdb"], required: false },
-      path: { type: String, required: false }
+      provider: { type: String, enum: ["tmdb", "stored"], required: false },
+      path: { type: String, required: false },
+    },
+    // Offline poster storage (binary). IMPORTANT: exclude this field from JSON API responses.
+    posterStored: {
+      mime: { type: String, required: false },
+      data: { type: Buffer, required: false },
     },
     external: {
       tmdbId: { type: Number, required: false },

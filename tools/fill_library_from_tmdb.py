@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 from typing import Iterable
 
 import requests
+from bson.binary import Binary
 from pymongo import MongoClient, ASCENDING, ReturnDocument
 
 
@@ -137,6 +138,21 @@ def upsert_library_film(db, det: dict) -> dict:
     budget = det.get("budget")
     revenue = det.get("revenue")
     vote_avg = det.get("vote_average")
+    poster_stored = None
+    poster_mime = None
+
+    if poster_path:
+        try:
+            img_url = f"https://image.tmdb.org/t/p/w342{poster_path}"
+            ir = requests.get(img_url, timeout=20)
+            if ir.ok and ir.content:
+                if len(ir.content) <= 2_000_000:
+                    poster_mime = ir.headers.get("content-type") or "image/jpeg"
+                    poster_stored = Binary(ir.content)
+        except Exception:
+            # ignore poster download failures
+            poster_stored = None
+            poster_mime = None
 
     now = now_iso()
     update = {
@@ -146,7 +162,8 @@ def upsert_library_film(db, det: dict) -> dict:
             "releaseYear": release_year,
             "type": "movie",
             "genres": [],
-            "poster": ({"provider": "tmdb", "path": poster_path} if poster_path else None),
+            "poster": ({"provider": ("stored" if poster_stored else "tmdb"), "path": poster_path} if poster_path else None),
+            "posterStored": ({"mime": poster_mime, "data": poster_stored} if poster_stored else None),
             "money": {
                 "budgetUsd": ({"selected": int(budget)} if isinstance(budget, (int, float)) and budget else {}),
                 "grossWorldwideUsd": ({"selected": int(revenue)} if isinstance(revenue, (int, float)) and revenue else {}),
